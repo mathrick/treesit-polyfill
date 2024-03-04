@@ -25,20 +25,47 @@
 (defalias 'treesit-compiled-query-p 'tsc-query-p)
 (defalias 'treesit-query-p 'tsc-query-p)
 
+(defun tsp--wrap-node (node parser)
+  "Return (cons NODE PARSER). This is needed because tree-sit.el
+does not provide API to retrieve a node's parser, but treesit.el
+does"
+  (cons node parser))
 
-(defun treesit--parse-string-to-tree (string language)
-  "Like `treesit-parse-string', but return a tree, rather than its root node.
-Internal implementation detail."
-  (let ((parser (tsc-make-parser)))
-    (tsc-set-language parser (tree-sitter-require language))
-    (tsc-parse-string parser string)))
+(cl-defmacro tsp--unwrap-node ((node-var parser-var) node &body body)
+  "Helper to unwrap the cons of NODE PARSER."
+  `(pcase ,node
+     ((and `(,,node-var . ,,parser-var)
+           (guard (tsc-node-p ,node-var)))
+      ,@body)
+     ((pred tsc-node-p)
+      (let ((,node-var ,node)
+            (,parser-var nil))
+         ,@body))
+     (_
+      (error "%s is not a valid treesit-polyfill node, should be (cons TSC-NODE TSC-PARSER)" ,node))))
+
+(cl-defmacro tsp--node-defun (name (node-arg parser-arg &rest args) &body body)
+  "Like `defun', but wraps body in `tsp--unwrap-node'."
+  (declare (indent defun))
+  `(defun ,name (,node-arg ,@args)
+     (tsp--unwrap-node (,node-arg ,parser-arg) ,node-arg
+      ,@body)))
+
+(tsp--node-defun treesit-node-language (node parser)
+  (tsc--lang-symbol (tsc-parser-language parser)))
 
 (defun treesit-parse-string (string language)
   "Parse STRING using a parser for LANGUAGE.
 Return the root node of the syntax tree."
-  (tsc-root-node
-   (treesit--parse-string-to-tree string language)))
+  (let ((parser (tsc-make-parser)))
+    (tsc-set-language parser (tree-sitter-require language))
+    (tsp--wrap-node (tsc-root-node (tsc-parse-string parser string))
+                    parser)))
 
 (provide 'treesit-polyfill)
 
 ;;; treesit-polyfill.el ends here
+
+;; Local Variables:
+;; nameless-current-name: "treesit"
+;; End:
