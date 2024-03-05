@@ -12,55 +12,59 @@
 
 ;;; Commentary:
 
-;; This file provides a polyfill implementing the Emacs 29+ built-in
-;; treesit.el package on top of the tree-sitter.el package, thus
-;; providing compatibility with older versions of Emacs
+;; This package provides a polyfill implementing the Emacs 29+
+;; built-in treesit.el package on top of the tree-sitter.el package,
+;; thus providing compatibility with older versions of Emacs
+
+;; This file contains the high-level API implemented in terms of core
+;; APIs, for the purpose of completeness. These definitions are copied
+;; directly from treesit.el and don't interact with the low-level
+;; tree-sitter.el primitives.
 
 ;; Currently tracking git tag emacs-29.2 (ef01b634d219bcceda17dcd61024c7a12173b88c)
 
 ;;; Code:
 
-(defalias 'treesit-parser-p 'tsc-parser-p)
-(defalias 'treesit-node-p 'tsc-node-p)
-(defalias 'treesit-compiled-query-p 'tsc-query-p)
-(defalias 'treesit-query-p 'tsc-query-p)
+(require 'treesit-polyfill-core)
 
-(defun tsp--wrap-node (node parser)
-  "Return (cons NODE PARSER). This is needed because tree-sit.el
-does not provide API to retrieve a node's parser, but treesit.el
-does"
-  (cons node parser))
+(defun treesit-available-p ()
+  "Return non-nil if tree-sitter support is built-in and available."
+  'polyfill)
 
-(cl-defmacro tsp--unwrap-node ((node-var parser-var) node &body body)
-  "Helper to unwrap the cons of NODE PARSER."
-  `(pcase ,node
-     ((and `(,,node-var . ,,parser-var)
-           (guard (tsc-node-p ,node-var)))
-      ,@body)
-     ((pred tsc-node-p)
-      (let ((,node-var ,node)
-            (,parser-var nil))
-         ,@body))
-     (_
-      (error "%s is not a valid treesit-polyfill node, should be (cons TSC-NODE TSC-PARSER)" ,node))))
+(defun treesit-node-buffer (node)
+  "Return the buffer in which NODE belongs."
+  (treesit-parser-buffer
+   (treesit-node-parser node)))
 
-(cl-defmacro tsp--node-defun (name (node-arg parser-arg &rest args) &body body)
-  "Like `defun', but wraps body in `tsp--unwrap-node'."
-  (declare (indent defun))
-  `(defun ,name (,node-arg ,@args)
-     (tsp--unwrap-node (,node-arg ,parser-arg) ,node-arg
-      ,@body)))
+(defun treesit-node-language (node)
+  "Return the language symbol that NODE's parser uses."
+  (treesit-parser-language
+   (treesit-node-parser node)))
 
-(tsp--node-defun treesit-node-language (node parser)
-  (tsc--lang-symbol (tsc-parser-language parser)))
+(defvar-local treesit-language-at-point-function nil
+  "A function that returns the language at point.
+This is used by `treesit-language-at', which is used by various
+functions to determine which parser to use at point.
 
-(defun treesit-parse-string (string language)
-  "Parse STRING using a parser for LANGUAGE.
-Return the root node of the syntax tree."
-  (let ((parser (tsc-make-parser)))
-    (tsc-set-language parser (tree-sitter-require language))
-    (tsp--wrap-node (tsc-root-node (tsc-parse-string parser string))
-                    parser)))
+The function is called with one argument, the position of point.
+
+In general, this function should call `treesit-node-at' with an
+explicit language (usually the host language), and determine the
+language at point using the type of the returned node.
+
+DO NOT derive the language at point from parser ranges.  It's
+cumbersome and can't deal with some edge cases.")
+
+(defun treesit-language-at (position)
+  "Return the language at POSITION.
+This function assumes that parser ranges are up-to-date.  It
+returns the return value of `treesit-language-at-point-function'
+if it's non-nil, otherwise it returns the language of the first
+parser in `treesit-parser-list', or nil if there is no parser."
+  (if treesit-language-at-point-function
+      (funcall treesit-language-at-point-function position)
+    (when-let ((parser (car (treesit-parser-list))))
+      (treesit-parser-language parser))))
 
 (provide 'treesit-polyfill)
 
