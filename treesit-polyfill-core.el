@@ -30,6 +30,13 @@
 (defalias 'treesit-compiled-query-p 'tsc-query-p)
 (defalias 'treesit-query-p 'tsc-query-p)
 
+(defun tsc--sym-name (symbol)
+  "Like `symbol-name', but skips initial : in keywords"
+  (let ((name (symbol-name symbol)))
+    (if (keywordp symbol)
+        (substring name 1)
+      name)))
+
 (defvar tsp--buffer-parser-map
   (make-hash-table)
   "Hash table providing a mapping from buffers to their parsers.
@@ -162,6 +169,148 @@ does."
          ,@body))
      (_
       (error "%s is not a valid treesit-polyfill node, should be (cons NODE PARSER)" ,node))))
+
+(cl-defmacro tsp--node-defun (name (node-and-parser &rest args)
+                                   &body body)
+  "Helper macro which automatically unwraps argument called NODE-VAR"
+  (declare (indent defun))
+  (destructuring-bind (node-var &optional parser-var
+                                &key (allow-nil t) rewrap)
+      (if (listp node-and-parser)
+          node-and-parser
+        (list node-and-parser))
+    (let* ((parser-var (if (or (not parser-var)
+                               (eq parser-var '_))
+                           ;; Can't use _ because we expand to `pcase', and _ is special there
+                           (gensym "parser")
+                         parser-var))
+           (args (cons node-var args))
+           (doc (when (and (stringp (first body))
+                           (rest body))
+                  (first body)))
+           (body (if doc (rest body)
+                   body))
+           (body (if rewrap
+                     `((tsp--wrap-node (progn ,@body) ,parser-var))
+                   body)))
+      `(defun ,name (,@args)
+         ,doc
+         (if ,node-var
+             (tsp--unwrap-node (,node-var ,parser-var) ,node-var
+               ,@body)
+           ,(unless allow-nil
+              '(error "NODE cannot be nil")))))))
+
+(defmacro tsp--node-alias (symbol args definition &optional doc)
+  `(tsp--node-defun ,symbol (node ,@args)
+     ,(when doc (list doc))
+     (,definition node ,@args)))
+
+;; These correspond to the built-in C functions of treesit.el, and are declared in the same order
+(tsp--node-defun treesit-node-type (node)
+  "Return the NODE’s type as a string.
+If NODE is nil, return nil."
+  (symbol-name (tsc-node-type node)))
+
+(tsp--node-alias treesit-node-start () tsc-node-start-position
+  "Return the NODE’s start position in its buffer.
+If NODE is nil, return nil.")
+
+(tsp--node-alias treesit-node-end () tsc-node-end-position
+  "Return the NODE’s end position in its buffer.
+If NODE is nil, return nil.")
+
+(tsp--node-alias treesit-node-string () tsc-node-to-sexp
+  "Return the string representation of NODE.
+If NODE is nil, return nil.")
+
+(tsp--node-alias treesit-node-parent () tsc-get-parent
+  "Return the immediate parent of NODE.
+Return nil if NODE has no parent.  If NODE is nil, return nil.")
+
+(tsp--node-defun treesit-node-child ((node _ :rewrap t) n &optional named)
+  "Return the Nth child of NODE.
+
+Return nil if there is no Nth child.  If NAMED is non-nil, look for
+named child only.  NAMED defaults to nil.  If NODE is nil, return
+nil.
+
+N could be negative, e.g., -1 represents the last child."
+  (let* ((n (if (< n 0)
+                ;; Count from the end if N is negative
+                (+ (treesit-node-child-count node named) n)
+              n))
+         (func (if named #'tsc-get-nth-named-child #'tsc-get-nth-child)))
+    (funcall func node n)))
+
+(tsp--node-alias treesit-node-check () FIXME
+  "Return non-nil if NODE has PROPERTY, nil otherwise.")
+
+(tsp--node-defun treesit-node-field-name-for-child (node n)
+  "Return the field name of the Nth child of NODE.
+
+Return nil if there’s no Nth child, or if it has no field.
+If NODE is nil, return nil.
+
+N counts all children, i.e., named ones and anonymous ones.
+
+N could be negative, e.g., -1 represents the last child."
+  (let* ((n (if (< n 0)
+                (+ (tsc-count-children node) n)
+              n))
+         (cursor (tsc-make-cursor node)))
+    (tsc-goto-first-child cursor)
+    (cl-loop for i from 1 to n do (tsc-goto-next-sibling cursor))
+    (tsc--sym-name (tsc-current-field cursor))))
+
+(tsp--node-defun treesit-node-child-count (node &optional named)
+  "Return the number of children of NODE.
+
+If NAMED is non-nil, count named children only.  NAMED defaults to
+nil.  If NODE is nil, return nil."
+  (if named (tsc-count-named-children node)
+    (tsc-count-children node)))
+
+(tsp--node-alias treesit-node-child-by-field-name () FIXME
+  "Return the child of NODE with FIELD-NAME.
+Return nil if there is no such child.  If NODE is nil, return nil.")
+
+(tsp--node-alias treesit-node-next-sibling () FIXME
+    "Return the next sibling of NODE.
+
+Return nil if there is no next sibling.  If NAMED is non-nil, look for named
+siblings only.  NAMED defaults to nil.  If NODE is nil, return nil.")
+
+(tsp--node-alias treesit-node-prev-sibling () FIXME
+  "Return the previous sibling of NODE.
+
+Return nil if there is no previous sibling.  If NAMED is non-nil, look
+for named siblings only.  NAMED defaults to nil.  If NODE is nil,
+return nil.")
+
+(tsp--node-alias treesit-node-first-child-for-pos () FIXME
+  "Return the first child of NODE for buffer position POS.
+
+Specifically, return the first child that extends beyond POS.
+Return nil if there is no such child.
+If NAMED is non-nil, look for named children only.  NAMED defaults to nil.
+Note that this function returns an immediate child, not the smallest
+(grand)child.  If NODE is nil, return nil.")
+
+(tsp--node-alias treesit-node-descendant-for-range () FIXME
+    "Return the smallest node that covers buffer positions BEG to END.
+
+The returned node is a descendant of NODE.
+Return nil if there is no such node.
+If NAMED is non-nil, look for named child only.  NAMED defaults to nil.
+If NODE is nil, return nil.")
+
+(tsp--node-alias treesit-node-eq () tsc-node-eq
+  "Return non-nil if NODE1 and NODE2 refer to the same node.
+If any one of NODE1 and NODE2 is nil, return nil.
+This function uses the same equivalence metric as ‘equal’, and returns
+non-nil if NODE1 and NODE2 refer to the same node in a syntax tree
+produced by tree-sitter.")
 
 (defun treesit-parse-string (string language)
   "Parse STRING using a parser for LANGUAGE.
