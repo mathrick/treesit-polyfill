@@ -158,7 +158,12 @@ does."
   (cons node parser))
 
 (cl-defmacro tsp--unwrap-node ((node-var parser-var) node &body body)
-  "Helper to unwrap the cons of NODE PARSER."
+  "Helper to unwrap the cons of (NODE . PARSER) inside BODY.
+The unwrapped values will be bound to NODE-VAR and PARSER-VAR.
+
+NODE must satisfy `tsc-node-p'. It is also permissible to pass in
+a naked NODE (ie. not a cons), in which case the PARSER-VAR will
+be bound to nil."
   `(pcase ,node
      ((and `(,,node-var . ,,parser-var)
            (guard (tsc-node-p ,node-var)))
@@ -172,7 +177,25 @@ does."
 
 (cl-defmacro tsp--node-defun (name (node-and-parser &rest args)
                                    &body body)
-  "Helper macro which automatically unwraps argument called NODE-VAR"
+  "Helper macro around `defun' which automatically unwraps a passed-in node.
+NODE-AND-PARSER can be a list of the form:
+\(NODE-VAR &OPTIONAL PARSER-VAR &KEY (ALLOW-NIL T) REWRAP)
+or a single name, which is equivalent to (NODE-VAR).
+
+BODY will be automatically wrapped in `tsp--unwrap-node'.
+
+NODE-VAR and PARSER-VAR are symbols which will be bound to the
+unwrapped value of node and parser respectively inside
+BODY. PARSER-VAR can be omitted or '_, in which case it will not
+be bound. NODE-VAR will also be included as the first argument
+of the generated `defun'.
+
+ALLOW-NIL controls whether the node passed in is allowed to be
+nil (t by default). If so, the whole function will return nil in
+that case.
+
+REWRAP means the return value will be automatically wrapped via
+`tsp--wrap-node', using the same parser value as was passed in."
   (declare (indent defun))
   (destructuring-bind (node-var &optional parser-var
                                 &key (allow-nil t) rewrap)
