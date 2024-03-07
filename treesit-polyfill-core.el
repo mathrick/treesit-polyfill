@@ -151,6 +151,34 @@ This symbol is the one used to create the parser."
       (error "Parser %s has no known buffer association. It might have been created outside of treesit.el API"
              parser)))
 
+(defun treesit-parser-root-node (parser)
+  "Return the root node of PARSER."
+  (error "FIXME: Not yet implemented"))
+
+(defun treesit-parser-set-included-ranges (parser ranges)
+  "Limit PARSER to RANGES.
+
+RANGES is a list of (BEG . END), each (BEG . END) defines a region in
+which the parser should operate.  Regions must not overlap, and the
+regions should come in order in the list.  Signal
+‘treesit-set-range-error’ if the argument is invalid, or something
+else went wrong.  If RANGES is nil, the PARSER is to parse the whole
+buffer."
+  (error "FIXME: Not yet implemented"))
+
+(defun treesit-parser-included-ranges (parser)
+  "Return the ranges set for PARSER.
+If no ranges are set for PARSER, return nil.
+See also ‘treesit-parser-set-included-ranges’."
+  (error "FIXME: Not yet implemented"))
+
+(defun treesit-parser-add-notifier (parser function)
+  "FUNCTION must be a function symbol, rather than a lambda form.
+FUNCTION should take 2 arguments, RANGES and PARSER.  RANGES is a list
+of cons cells of the form (START . END), where START and END are buffer
+positions.  PARSER is the parser issuing the notification."
+  (error "FIXME: Not yet implemented"))
+
 (defun tsp--wrap-node (node parser)
   "Return (cons NODE PARSER). This is needed because tree-sit.el
 does not provide API to retrieve a node's parser, but treesit.el
@@ -404,6 +432,189 @@ Return the root node of the syntax tree."
     (tsc-set-language parser (tree-sitter-require language))
     (tsp--wrap-node (tsc-root-node (tsc-parse-string parser string))
                     parser)))
+
+(defun treesit-pattern-expand (pattern)
+  "Expand PATTERN to its string form.
+
+PATTERN can be
+
+    :anchor
+    :?
+    :*
+    :+
+    :equal
+    :match
+    (TYPE PATTERN...)
+    [PATTERN...]
+    FIELD-NAME:
+    @CAPTURE-NAME
+    (_)
+    _
+    \"TYPE\"
+
+See Info node ‘(elisp)Pattern Matching’ for detailed explanation."
+  (error "FIXME: Not yet implemented"))
+
+(defun treesit-query-expand (query)
+  "Expand sexp QUERY to its string form.
+
+A PATTERN in QUERY can be
+
+    :anchor
+    :?
+    :*
+    :+
+    :equal
+    :match
+    (TYPE PATTERN...)
+    [PATTERN...]
+    FIELD-NAME:
+    @CAPTURE-NAME
+    (_)
+    _
+    \"TYPE\"
+
+See Info node ‘(elisp)Pattern Matching’ for detailed explanation."
+  (error "FIXME: Not yet implemented"))
+
+(defun treesit-query-compile (language query &optional eager)
+  "Compile QUERY to a compiled query.
+
+Querying with a compiled query is much faster than an uncompiled one.
+LANGUAGE is the language this query is for.
+
+If EAGER is non-nil, immediately load LANGUAGE and compile the query.
+Otherwise defer the compilation until the query is first used.
+
+Signal ‘treesit-query-error’ if QUERY is malformed or something else
+goes wrong.  (This only happens if EAGER is non-nil.)
+You can use ‘treesit-query-validate’ to validate and debug a query."
+  (error "FIXME: Not yet implemented"))
+
+(defun treesit-query-capture (node query &optional beg end node-only)
+  "Query NODE with patterns in QUERY.
+
+Return a list of (CAPTURE_NAME . NODE).  CAPTURE_NAME is the name
+assigned to the node in PATTERN.  NODE is the captured node.
+
+QUERY is either a string query, a sexp query, or a compiled query.
+See Info node ‘(elisp)Pattern Matching’ for how to write a query in
+either string or sexp form.  When using repeatedly, a compiled query
+is much faster than a string or sexp one, so it is recommend to
+compile your query if it will be used repeatedly.
+
+BEG and END, if both non-nil, specify the region of buffer positions
+in which the query is executed.  Any matching node whose span overlaps
+with the region between BEG and END are captured, it doesn’t have to
+be completely in the region.
+
+If NODE-ONLY is non-nil, return a list of nodes.
+
+Besides a node, NODE can also be a parser, in which case the root node
+of that parser is used.
+NODE can also be a language symbol, in which case the root node of a
+parser for that language is used.  If such a parser doesn’t exist, it
+is created.
+
+Signal ‘treesit-query-error’ if QUERY is malformed or something else
+goes wrong.  You can use ‘treesit-query-validate’ to validate and debug
+the query."
+  (error "FIXME: Not yet implemented"))
+
+
+(defun treesit-search-subtree (node predicate &optional backward all depth)
+  "Traverse the parse tree of NODE depth-first using PREDICATE.
+
+Traverse the subtree of NODE, and match PREDICATE with each node along
+the way.  PREDICATE is a regexp string that matches against each
+node’s type, or a function that takes a node and returns nil/non-nil.
+
+By default, only traverse named nodes, but if ALL is non-nil, traverse
+all nodes.  If BACKWARD is non-nil, traverse backwards.  If DEPTH is
+non-nil, only traverse nodes up to that number of levels down in the
+tree.  If DEPTH is nil, default to 1000.
+
+Return the first matched node, or nil if none matches."
+  (error "FIXME: Not yet implemented"))
+
+(defun treesit-search-forward (start predicate &optional backward all)
+  "Search for node matching PREDICATE in the parse tree of START.
+
+Start traversing the tree from node START, and match PREDICATE with
+each node (except START itself) along the way.  PREDICATE is a regexp
+string that matches against each node’s type, or a function that takes
+a node and returns non-nil if it matches.
+
+By default, only search for named nodes, but if ALL is non-nil, search
+for all nodes.  If BACKWARD is non-nil, search backwards.
+
+Return the first matched node, or nil if none matches.
+
+For a tree like below, where START is marked by S, traverse as
+numbered from 1 to 12:
+
+                12
+                |
+       S--------3----------11
+       |        |          |
+  o--o-+--o  1--+--2    6--+-----10
+  |  |                  |        |
+  o  o                +-+-+   +--+--+
+                      |   |   |  |  |
+                      4   5   7  8  9
+
+Note that this function doesn’t traverse the subtree of START, and it
+always traverse leaf nodes first, then upwards."
+  (error "FIXME: Not yet implemented"))
+
+(defun treesit-induce-sparse-tree (root predicate &optional process-fn depth)
+  "Create a sparse tree of ROOT’s subtree.
+
+This takes the subtree under ROOT, and combs it so only the nodes
+that match PREDICATE are left, like picking out grapes on the vine.
+PREDICATE is a regexp string that matches against each node’s type.
+
+For a subtree on the left that consist of both numbers and letters, if
+PREDICATE is \"is letter\", the returned tree is the one on the right.
+
+	a                 a              a
+	|                 |              |
+    +---+---+         +---+---+      +---+---+
+    |   |   |         |   |   |      |   |   |
+    b   1   2         b   |   |      b   c   d
+	|   |     =>      |   |  =>      |
+	c   +--+          c   +          e
+	|   |  |          |   |
+     +--+   d  4       +--+   d
+     |  |              |
+     e  5              e
+
+If PROCESS-FN is non-nil, it should be a function of one argument.  In
+that case, instead of returning the matched nodes, pass each node to
+PROCESS-FN, and use its return value instead.
+
+If non-nil, DEPTH is the number of levels to go down the tree from
+ROOT.  If DEPTH is nil or omitted, it defaults to 1000.
+
+Each node in the returned tree looks like (NODE . (CHILD ...)).  The
+root of this tree might be nil, if ROOT doesn’t match PREDICATE.
+
+If no node matches PREDICATE, return nil.
+
+PREDICATE can also be a function that takes a node and returns
+nil/non-nil, but it is slower and more memory consuming than using
+a regexp."
+  (error "FIXME: Not yet implemented"))
+
+(defun treesit-subtree-stat (node)
+  "Return information about the subtree of NODE.
+
+Return a list (MAX-DEPTH MAX-WIDTH COUNT), where MAX-DEPTH is the
+maximum depth of the subtree, MAX-WIDTH is the maximum number of
+direct children of nodes in the subtree, and COUNT is the number of
+nodes in the subtree, including NODE."
+  (error "FIXME: Not yet implemented"))
+
 
 (provide 'treesit-polyfill-core)
 
