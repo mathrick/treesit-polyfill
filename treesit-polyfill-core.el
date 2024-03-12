@@ -475,7 +475,7 @@ A PATTERN in QUERY can be
     \"TYPE\"
 
 See Info node ‘(elisp)Pattern Matching’ for detailed explanation."
-  (error "FIXME: Not yet implemented"))
+  (mapconcat #'treesit-pattern-expand query " "))
 
 (defun treesit-query-compile (language query &optional eager)
   "Compile QUERY to a compiled query.

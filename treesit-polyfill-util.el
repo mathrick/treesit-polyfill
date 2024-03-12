@@ -31,10 +31,12 @@
   "Quick and dirty reader to parse a tree-sitter query sexp in STRING.
 Can't use `read' because of the #predicate syntax.
 
-Returns a list of one or more sexps."
+Returns a list of one or more sexps, compatible with `treesit-query-capture'."
   (cl-flet ((finalise-token (string state last-char where &aux (where (or where "??")))
                          (case state
                            (:number (string-to-number string))
+                           (:anchor :anchor)
+                           (:string string)
                            ((:symbol :capture :predicate) (intern string))
                            ((:field)
                             (unless (memql last-char '(?: ?\ ))
@@ -54,7 +56,7 @@ Returns a list of one or more sexps."
                with where = 0
                for i from 0
                ;; t if the previous char was whitespace, important for parsing quantifiers
-               for whitespace = nil then (eql char ?\ )
+               for whitespace = nil then (memql char '(?\  ?\n))
                for char being the elements of string do
                (block nil
                  (cl-flet ((next-char (&optional (new-state nil new-state-p))
@@ -66,7 +68,7 @@ Returns a list of one or more sexps."
                                       (return))
                            (standard-next-state ()
                                                 (case state
-                                                  ((nil :number :symbol :anchor) :symbol)
+                                                  ((nil :negation :number :symbol :anchor) :symbol)
                                                   ((:string :field :capture :predicate) state)
                                                   (t
                                                    (error "No standard next state for %s" state))))
@@ -99,7 +101,15 @@ Returns a list of one or more sexps."
                                       (if stack
                                           (push parsed (first (first stack)))
                                         (push parsed result)))))
-
+                   ;; Note: although the official TS grammar for TS queries talks about
+                   ;; comments (';'), they are not documented (and thus probably not used
+                   ;; much) and I don't want to bother suppporting them, so this parser
+                   ;; doesn't.
+                   ;;
+                   ;; Note: it is also more lenient in some places, and possibly a bit
+                   ;; more strict in some others; generally in places where the docs don't
+                   ;; really bother to explain things so it's hard to tell what the
+                   ;; official syntax is
                    (pcase char
                      ((or ?\( ?\[)
                       (when (or escape (eq state :string))
@@ -125,19 +135,25 @@ Returns a list of one or more sexps."
                      ;; Note: this will misparse negative numbers as symbols, but I'm not sure
                      ;; numbers are even a thing in tree-sitter queries, so it shouldn't matter
                      ((guard (string-match-p "[-[:alpha:]_]" (string char)))
-                      (next-char (if (memq state '(nil :number))
-                                     :symbol
-                                   state)))
+                      (next-char (standard-next-state)))
                      (?.
                       (when escape
                         (next-char (standard-next-state)))
-                      (case state
-                        ((nil :string :number :symbol :anchor :capture :predicate)
+                      (ecase state
+                        ((nil) (next-char :anchor))
+                        ((:negation :string :field :number :symbol :anchor :capture :predicate)
                          (next-char (standard-next-state)))
                         (:quantifier
-                         (error "Syntax error at %s, '%c' cannot follow quantifier" i char))
-                        ))
-                     (?\   ; space
+                         (error "Syntax error at %s, '%c' cannot follow quantifier" i char))))
+                     (?!
+                      (when escape
+                        (next-char (standard-next-state)))
+                      (case state
+                        ((nil) (next-char :negation))
+                        ((:string :predicate) (next-char))
+                        (t
+                         (error "Syntax error at  %s, '!' is only valid as negation and in predicate names" i))))
+                     ((or ?\  ?\n)   ; space or newline
                       (if escape
                           (next-char)
                         (collect (finalise-token))))
@@ -153,7 +169,7 @@ Returns a list of one or more sexps."
                         (case state
                           (:string
                            (collect (finalise-token)))
-                          (nil (setf state :string
+                          ((nil) (setf state :string
                                      where i))
                           (t (collect (finalise-token))
                              (setf state :string
@@ -162,7 +178,7 @@ Returns a list of one or more sexps."
                       (when escape
                         (next-char (standard-next-state)))
                       (ecase state
-                        ((:number :symbol :field :capture :predicate :quantifier)
+                        ((:negation :number :symbol :field :capture :predicate :quantifier)
                          (error "Syntax error at %s, '@' is only valid at the start of token" i))
                         (:string (next-char))
                         ((nil) (next-char :capture))))
@@ -170,18 +186,20 @@ Returns a list of one or more sexps."
                       (when escape
                         (next-char (standard-next-state)))
                       (ecase state
-                        ((:number :symbol :field :capture :predicate :quantifier)
+                        ((:negation :number :symbol :field :capture :predicate :quantifier)
                          (error "Syntax error at %s, '#' is only valid at the start of token" i))
                         (:string (next-char))
-                        ((nil) (next-char :predicate))))
+                        ((nil)
+                         (setf char ?:)
+                         (next-char :predicate))))
                      (?:
                       (when escape
                         (next-char (standard-next-state)))
                       (ecase state
                         (:string (next-char))
-                        ((nil :number :symbol)
+                        ((:number :symbol)
                          (next-char :field))
-                        ((:field :capture :predicate :quantifier)
+                        ((nil :negation :field :capture :predicate :quantifier)
                          (error "Syntax error at %s, ':' is only valid at the end of field names"))))
                      ((or ?+ ?* ??)
                       (when escape
@@ -199,17 +217,17 @@ Returns a list of one or more sexps."
                             ;; quantifier after the symbol, the docs are not very thorough
                             ((nil :number :symbol)
                              (next-char :quantifier))
-                            ((:field :capture :quantifier)
+                            ((:negation :field :capture :quantifier)
                              (error "Syntax error at %s, quantifier '%c' is not valid in this context (%s)"
                                     i char state)))
                         (ecase state
                           (:string (next-char))
                           ((nil :number :symbol)
                            (next-char :quantifier))
-                          ((:field :capture :predicate :quantifier)
+                          ((:negation :field :capture :predicate :quantifier)
                            (error "Syntax error at %s, quantifier '%c' is not valid in this context (%s)"
                                   i char state)))))
-                     
+
                      (_
                       (error "Syntax error at %s, unexpected character `%c'" i char)))))
             finally do
@@ -226,7 +244,7 @@ Returns a list of one or more sexps."
   (cl-loop for (func orig-form expected . data) in spec
            for signalled = nil
            do (if (eq expected :error)
-                  (destructuring-bind (error-class &rest extra) data
+                  (destructuring-bind (&optional (error-class 'error) &rest extra) data
                     (condition-case err
                         (funcall func)
                       (error
@@ -252,13 +270,34 @@ Returns a list of one or more sexps."
            collect `(list (lambda () ,form) ',form ,expected ,@data) into test-forms
            finally return `(test-tsp--do-run-tests (list ,@test-forms))))
 
-(defun test-tsp--parse-sexp ()
+(defun test-tsp--read-sexp ()
   "Quick and dirty test suite for `tsp--read-sexp'"
   (test-tsp-run-tests
-  ((tsp--read-sexp "foo") '(foo))
-  ((tsp--read-sexp "foo bar baz") '(foo bar baz))
-  ((tsp--read-sexp "(function_definition name: (identifier) @name)")
-   '((function_definition name: (identifier) @name)))))
+    ((tsp--read-sexp "foo") '(foo))
+    ((tsp--read-sexp "foo bar baz") '(foo bar baz))
+
+    ((tsp--read-sexp "(function_definition name: (identifier) @name)")
+     '((function_definition name: (identifier) @name)))
+    ((tsp--read-sexp "(function_definition name: ([identifier \"none\"]+) @name)?")
+     '((function_definition name: ([identifier "none"] :+) @name) :?))
+    ((tsp--read-sexp "[(function_definition name: ([identifier \"none\"]*) @name) @func.named
+                     (function_definition !name) @func.anonymous] @func")
+     '([(function_definition name: ([identifier "none"] :*) @name) @func.named
+        (function_definition !name) @func.anonymous] @func))
+
+    ((tsp--read-sexp "(call (_) @call.inner)") '((call (_) @call.inner)))
+    ((tsp--read-sexp "(call _)") '((call _)))
+
+    ((tsp--read-sexp "(array . (identifier) @the-element)")
+     '((array :anchor (identifier) @the-element)))
+    ((tsp--read-sexp "(block (_) @last-expression .)")
+     '((block (_) @last-expression :anchor)))
+
+    ((tsp--read-sexp "((identifier) @variable.builtin (#eq? @variable.builtin \"self\") (#arbitrary! @variable.builtin))")
+     '(((identifier) @variable.builtin (:eq? @variable.builtin "self") (:arbitrary! @variable.builtin))))
+
+    ((tsp--read-sexp "(call [)") :error)
+    ((tsp--read-sexp "(call [])))") :error)))
 
 ;;; treesit-polyfill-util.el ends here
 
