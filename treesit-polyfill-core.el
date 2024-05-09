@@ -30,6 +30,23 @@
 (defalias 'treesit-compiled-query-p 'tsc-query-p)
 (defalias 'treesit-query-p 'tsc-query-p)
 
+;; FIXME: review which ones of these we can even reasonably signal, and see what maps to
+;; tsc errors
+(define-error 'treesit-error "Generic tree-sitter error")
+(define-error 'treesit-query-error "Query pattern is malformed" 'treesit-error)
+(define-error 'treesit-parse-error "Parse failed" 'treesit-error)
+(define-error 'treesit-range-invalid
+  "RANGES are invalid: they have to be ordered and should not overlap"
+  'treesit-error)
+(define-error 'treesit-unparsed-edits "There are unparsed edits in the buffer" 'treesit-error)
+(define-error 'treesit-buffer-too-large "Buffer too large (> 4GiB)" 'treesit-error)
+(define-error 'treesit-load-language-error "Cannot load language definition" 'treesit-error)
+(define-error 'treesit-node-outdated "This node is outdated, please retrieve a new one" 'treesit-error)
+(define-error 'treesit-parser-deleted "This parser is deleted and cannot be used" 'treesit-error)
+(define-error 'treesit-invalid-predicate
+  "Invalid predicate, see `treesit-thing-settings' for valid forms for a predicate"
+  'treesit-error)
+
 (defun tsp--sym-name (symbol)
   "Like `symbol-name', but skips initial : in keywords"
   (let ((name (symbol-name symbol)))
@@ -59,20 +76,21 @@ See also `tsp--buffer-parser-map'.
 
 This is a part of the treesit-polyfill API.")
 
-(defun treesit-parser-list (&optional buffer)
-  "Return BUFFER’s parser list.
-
-BUFFER defaults to the current buffer.  If that buffer is an indirect
-buffer, its base buffer is used instead.  That is, indirect buffers
-use their base buffer’s parsers."
-  (gethash (tsp--get-target-buffer buffer) tsp--buffer-parser-map))
-
 (defun tsp--get-target-buffer (buffer)
   "Get the target buffer for treesit operations. This means if
   BUFFER is nil, use `current-buffer'. For indirect buffers, look
   up their base buffer and return that instead."
   (let ((buffer (or buffer (current-buffer))))
     (or (buffer-base-buffer buffer) buffer)))
+
+(defun tsp--sync-parser-buffer-map ()
+  "Reflect the contents of `tsp--buffer-parser-map' into `tsp--parser-buffer-map'."
+  (cl-loop for buf being the hash-keys of tsp--buffer-parser-map
+               using (hash-value parsers)
+           ;; cl-loop generates buggy code if we do "for parser in
+           ;; parsers" in the outer loop, have to use nested
+           do (cl-loop for parser in parsers
+                       do (setf (gethash parser tsp--parser-buffer-map) buf))))
 
 (defun tsp--lang (lang)
   "Given LANG, return a value that satisfies
@@ -128,19 +146,13 @@ See ‘treesit-parser-list’ for the buffer’s parser list."
     ;; FIXME: this might be slow, will need to see in practice
     (tsp--sync-parser-buffer-map)))
 
-(defun tsp--sync-parser-buffer-map ()
-  "Reflect the contents of `tsp--buffer-parser-map' into `tsp--parser-buffer-map'."
-  (cl-loop for buf being the hash-keys of tsp--buffer-parser-map
-               using (hash-value parsers)
-           ;; cl-loop generates buggy code if we do "for parser in
-           ;; parsers" in the outer loop, have to use nested
-           do (cl-loop for parser in parsers
-                       do (setf (gethash parser tsp--parser-buffer-map) buf))))
+(defun treesit-parser-list (&optional buffer)
+  "Return BUFFER’s parser list.
 
-(defun treesit-parser-language (parser)
-  "Return PARSER’s language symbol.
-This symbol is the one used to create the parser."
-  (tsp--lang-name (tsc-parser-language parser)))
+BUFFER defaults to the current buffer.  If that buffer is an indirect
+buffer, its base buffer is used instead.  That is, indirect buffers
+use their base buffer’s parsers."
+  (gethash (tsp--get-target-buffer buffer) tsp--buffer-parser-map))
 
 (defun treesit-parser-buffer (parser)
   "Return the buffer of PARSER."
@@ -150,6 +162,11 @@ This symbol is the one used to create the parser."
   (or (gethash parser tsp--parser-buffer-map)
       (error "Parser %s has no known buffer association. It might have been created outside of treesit.el API"
              parser)))
+
+(defun treesit-parser-language (parser)
+  "Return PARSER’s language symbol.
+This symbol is the one used to create the parser."
+  (tsp--lang-name (tsc-parser-language parser)))
 
 (defun treesit-parser-root-node (parser)
   "Return the root node of PARSER."
@@ -263,8 +280,16 @@ is the target `tsc-*' function to use. ARGS is an option list of
 extra arguments (other than NODE, which is implicit) to take and
 pass to the target. DOC is the docstring."
   `(tsp--node-defun ,symbol (node ,@args)
-     ,(when doc (list doc))
+     ,@(when doc (list doc))
      (,definition node ,@args)))
+
+(tsp--node-defun treesit-node-parser ((node parser))
+  "Return the parser to which NODE belongs.
+
+NOTE: This is a polyfill which depends on a wrapper around
+`tree-sitter' nodes. A bare node object will be accepted, but the
+result of this function will be `nil'."
+  parser)
 
 ;; These correspond to the built-in C functions of treesit.el, and are declared in the same order
 (tsp--node-defun treesit-node-type (node)
