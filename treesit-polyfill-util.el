@@ -40,9 +40,9 @@ Returns a list of one or more sexps, compatible with `treesit-query-capture'."
                            ((:symbol :capture :predicate) (intern string))
                            ((:field)
                             (unless (memql last-char '(?: ?\ ))
-                              (error "Syntax error at %s, ':' is only valid at the end of field names" where))
+                               (error "Syntax error at %s, ':' is only valid at the end of field names" where))
                             (intern string))
-                           (:quantifier (intern (concat ":" token)))
+                           (:quantifier (intern (concat ":" string)))
                            ;; If last-state is nil, this means we've only seen whitespace, so don't return anything
                            ((nil) nil)
                            (t

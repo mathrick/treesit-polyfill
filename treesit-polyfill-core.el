@@ -478,7 +478,14 @@ PATTERN can be
     \"TYPE\"
 
 See Info node ‘(elisp)Pattern Matching’ for detailed explanation."
-  (error "FIXME: Not yet implemented"))
+  (pcase pattern
+    (:anchor ".")
+    ((or :? :* :+)
+     (tsp--sym-name pattern))
+    ((or :match :equal :pred)
+     (concat "#" (tsp--sym-name pattern)))
+    ((pred stringp) (format "\"%s\"" pattern))
+    (_ (format "%s" pattern))))
 
 (defun treesit-query-expand (query)
   "Expand sexp QUERY to its string form.
@@ -500,7 +507,12 @@ A PATTERN in QUERY can be
     \"TYPE\"
 
 See Info node ‘(elisp)Pattern Matching’ for detailed explanation."
-  (mapconcat #'treesit-pattern-expand query " "))
+  (cond
+   ((listp query)
+    (format "(%s)" (mapconcat #'treesit-query-expand query " ")))
+   ((vectorp query)
+    (format "[%s]" (mapconcat #'treesit-query-expand query " ")))
+   (t (treesit-pattern-expand query))))
 
 (defun treesit-query-compile (language query &optional eager)
   "Compile QUERY to a compiled query.
