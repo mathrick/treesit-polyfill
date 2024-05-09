@@ -27,7 +27,7 @@
 ;; to rewrite them in order to implement treesit.el's `:pred' functionality. `read' can't
 ;; be used because it trips up on the #predicate syntax, and rolling out a one-off parser
 ;; for sexps seems easier than figuring out how to use `parse-partial-sexp'
-(defun tsp--read-sexp (string)
+(defun tsp--unexpand-query (string)
   "Quick and dirty reader to parse a tree-sitter query sexp in STRING.
 Can't use `read' because of the #predicate syntax.
 
@@ -270,34 +270,34 @@ Returns a list of one or more sexps, compatible with `treesit-query-capture'."
            collect `(list (lambda () ,form) ',form ,expected ,@data) into test-forms
            finally return `(test-tsp--do-run-tests (list ,@test-forms))))
 
-(defun test-tsp--read-sexp ()
-  "Quick and dirty test suite for `tsp--read-sexp'"
+(defun test-tsp--unexpand-query ()
+  "Quick and dirty test suite for `tsp--unexpand-query'"
   (test-tsp-run-tests
-    ((tsp--read-sexp "foo") '(foo))
-    ((tsp--read-sexp "foo bar baz") '(foo bar baz))
+    ((tsp--unexpand-query "foo") '(foo))
+    ((tsp--unexpand-query "foo bar baz") '(foo bar baz))
 
-    ((tsp--read-sexp "(function_definition name: (identifier) @name)")
+    ((tsp--unexpand-query "(function_definition name: (identifier) @name)")
      '((function_definition name: (identifier) @name)))
-    ((tsp--read-sexp "(function_definition name: ([identifier \"none\"]+) @name)?")
+    ((tsp--unexpand-query "(function_definition name: ([identifier \"none\"]+) @name)?")
      '((function_definition name: ([identifier "none"] :+) @name) :?))
-    ((tsp--read-sexp "[(function_definition name: ([identifier \"none\"]*) @name) @func.named
+    ((tsp--unexpand-query "[(function_definition name: ([identifier \"none\"]*) @name) @func.named
                      (function_definition !name) @func.anonymous] @func")
      '([(function_definition name: ([identifier "none"] :*) @name) @func.named
         (function_definition !name) @func.anonymous] @func))
 
-    ((tsp--read-sexp "(call (_) @call.inner)") '((call (_) @call.inner)))
-    ((tsp--read-sexp "(call _)") '((call _)))
+    ((tsp--unexpand-query "(call (_) @call.inner)") '((call (_) @call.inner)))
+    ((tsp--unexpand-query "(call _)") '((call _)))
 
-    ((tsp--read-sexp "(array . (identifier) @the-element)")
+    ((tsp--unexpand-query "(array . (identifier) @the-element)")
      '((array :anchor (identifier) @the-element)))
-    ((tsp--read-sexp "(block (_) @last-expression .)")
+    ((tsp--unexpand-query "(block (_) @last-expression .)")
      '((block (_) @last-expression :anchor)))
 
-    ((tsp--read-sexp "((identifier) @variable.builtin (#eq? @variable.builtin \"self\") (#arbitrary! @variable.builtin))")
+    ((tsp--unexpand-query "((identifier) @variable.builtin (#eq? @variable.builtin \"self\") (#arbitrary! @variable.builtin))")
      '(((identifier) @variable.builtin (:eq? @variable.builtin "self") (:arbitrary! @variable.builtin))))
 
-    ((tsp--read-sexp "(call [)") :error)
-    ((tsp--read-sexp "(call [])))") :error)))
+    ((tsp--unexpand-query "(call [)") :error)
+    ((tsp--unexpand-query "(call [])))") :error)))
 
 ;;; treesit-polyfill-util.el ends here
 
