@@ -200,7 +200,7 @@ Returns a list of one or more sexps, compatible with `treesit-query-capture'."
                         ((:number :symbol)
                          (next-char :field))
                         ((nil :negation :field :capture :predicate :quantifier)
-                         (error "Syntax error at %s, ':' is only valid at the end of field names"))))
+                         (error "Syntax error at %s, ':' is only valid at the end of field names" where))))
                      ((or ?+ ?* ??)
                       (when escape
                         (next-char (standard-next-state)))
@@ -238,6 +238,33 @@ Returns a list of one or more sexps, compatible with `treesit-query-capture'."
                                     state char where)
                     result))
             finally return (nreverse result))))
+
+(defun tsp--query-as-sexp (query)
+  "Ensure that QUERY is in SEXP form.
+If it's a string, run `tsp--unexpand-query', else return it unchanged"
+  (if (stringp query)
+      (tsp--unexpand-query query)
+    query))
+
+(defun tsp--walk-query (query fn &optional subst)
+  "Walk the QUERY, recursively running FN on each element.
+
+FN should be a function of two arguments, (ELEM PARENT). It will
+be called on each subtree before descending, then on each of its
+elements. If SUBST is t, FN's return value will be used instead
+of the element if it's different. If a substitution was made, it
+will not be further descended into."
+  (cl-loop with tree = (tsp--query-as-sexp query)
+           for elem in tree
+           for prev = nil then elem
+           if (listp elem)
+           do (tsp--walk-query elem fn)
+           else do (funcall fn elem)))
+
+(defun tsp--node-capture-p (sym)
+  "Return non-nil if SYM is a node capture (ie. symbol of the form @something)."
+  (and (symbolp sym)
+       (string-prefix-p (symbol-name sym) "@")))
 
 (defun test-tsp--do-run-tests (spec)
   "Quick and dirty test runner"
