@@ -599,6 +599,22 @@ You can use ‘treesit-query-validate’ to validate and debug a query."
   ;;    expects without needing to reimplement all of predicate matching logic
   ;;    ourselves. treesit.el does not, at the moment, support any-* predicate variants,
   ;;    so that might make things easier.
+  ;;
+  ;;    HOWEVER, further testing does suggest that, at least with differently-named nodes,
+  ;;    scoping is a thing. I.e., given the query:
+  ;;      (if_statement condition: ((integer) @numcond)
+  ;;                    consequence: (block (expression_statement ((integer) @num
+  ;;                                                               (:equal @numcond @numalt))))
+  ;;                    alternative: (else_clause body: (block (expression_statement (integer) @numalt))))
+  ;;    The capture errors out because @numalt is not visible in the scope in which :equal is declared
+  ;;
+  ;; Other notes:
+  ;;  * Treesitter's upstream docs on the subject are awful and explain nothing
+  ;;  * treesit.el's `:match' predicate seems to be equivalent to TSC's `.any-match?'.
+  ;;    There isn't an obvious equivalent to `.match?', but that shouldn't be a problem
+  ;;  * For `:equal', the behaviour is seemingly the same as `.eq?'. Again, no equivalent
+  ;;    of `.any-eq?'
+
   (let ((query (tsp--query-as-sexp query))
         (prefix "@tsp--pred-")
         (counter 0)
@@ -635,6 +651,8 @@ You can use ‘treesit-query-validate’ to validate and debug a query."
                                  t))
     (tsp--wrap-query (tsc-make-query (tree-sitter-require language))
                      (reverse predicates))))
+
+(tsp--node-defun treesit-query-capture ((node parser) query &optional beg end node-only)
   "Query NODE with patterns in QUERY.
 
 Return a list of (CAPTURE_NAME . NODE).  CAPTURE_NAME is the name
@@ -662,8 +680,24 @@ is created.
 Signal ‘treesit-query-error’ if QUERY is malformed or something else
 goes wrong.  You can use ‘treesit-query-validate’ to validate and debug
 the query."
-  (error "FIXME: Not yet implemented"))
-
+  (tsp--unwrap-query (query predicates) query
+    ;; FIXME: Need to account for NODE being a parser or language
+    (let* ((buffer (treesit-parser-buffer parser))
+           (matches (tsc-query-matches query node
+                                       (lambda (beg-byte end-byte)
+                                         (with-current-buffer buffer
+                                           (buffer-substring (byte-to-position beg-byte)
+                                                             (byte-to-position end-byte)))))))
+      (cl-loop for (i . captures) in matches
+               collect
+               (cl-loop inner with captures = (append captures nil)
+                        for (capture . node-ptr) in captures
+                        collect (if-let ((predicate (alist-get capture predicates)))
+                                    (destructuring-bind (pred-fn &rest args)
+                                        predicate
+                                      )
+                                  ;; If it's not one of our magic captures, just let it through
+                                  (cons capture (tsp--wrap-node node-ptr parser))))))))
 
 (defun treesit-search-subtree (node predicate &optional backward all depth)
   "Traverse the parse tree of NODE depth-first using PREDICATE.
