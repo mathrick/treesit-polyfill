@@ -258,13 +258,16 @@ will not be further descended into."
            for elem in tree
            for prev = nil then elem
            if (listp elem)
-           do (tsp--walk-query elem fn)
-           else do (funcall fn elem)))
+           collect (let ((candidate (funcall fn elem)))
+                     (if (eq candidate elem)
+                         (tsp--walk-query elem fn)
+                       candidate))
+           else collect (funcall fn elem)))
 
 (defun tsp--node-capture-p (sym)
   "Return non-nil if SYM is a node capture (ie. symbol of the form @something)."
   (and (symbolp sym)
-       (string-prefix-p (symbol-name sym) "@")))
+       (string-prefix-p "@" (symbol-name sym))))
 
 (defun test-tsp--do-run-tests (spec)
   "Quick and dirty test runner"

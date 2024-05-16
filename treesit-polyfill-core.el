@@ -610,8 +610,9 @@ You can use ‘treesit-query-validate’ to validate and debug a query."
   ;;
   ;; Other notes:
   ;;  * Treesitter's upstream docs on the subject are awful and explain nothing
-  ;;  * treesit.el's `:match' predicate seems to be equivalent to TSC's `.any-match?'.
-  ;;    There isn't an obvious equivalent to `.match?', but that shouldn't be a problem
+  ;;  * treesit.el's `:match' predicate seems to be equivalent to TSC's `.any-match?',
+  ;;    save for the argument order being reversed.  There isn't an obvious equivalent to
+  ;;    `.match?', but that shouldn't be a problem
   ;;  * For `:equal', the behaviour is seemingly the same as `.eq?'. Again, no equivalent
   ;;    of `.any-eq?'
 
@@ -624,32 +625,48 @@ You can use ‘treesit-query-validate’ to validate and debug a query."
         ;; of the ones we generate
         (conflicts ()))
     (tsp--walk-query query
-                     (lambda (elem _)
+                     (lambda (elem )
                        (when (and (symbolp elem)
                                   (string-prefix-p prefix (tsp--sym-name elem)))
                          (push elem conflicts))))
-    (cl-loop for pattern in query
-             ;; Keep track of which pattern we're inspecting to match it with results of
-             ;; `tsc-query-matches' later
-             for i from 0
-             do (tsp--walk-query pattern
-                                 (lambda (elem parent)
-                                   (pcase elem
-                                     ((and `(:pred ,fn ,@args)
-                                           (guard (functionp fn))
-                                           (guard (every (lambda (x) (or (tsp--node-capture-p x)
-                                                                         (stringp x))))))
-                                      (let ((capture (cl-loop for cand = (intern (format "%s%s" prefix counter))
-                                                              do (incf counter)
-                                                              while (memq cand conflicts)
-                                                              finally return cand)))
-                                        (push predicates `(,capture ,fn ,@args))
-                                        capture))
-                                     (`(:pred ,fn ,@args)
-                                      (error "Invalid :pred use: %s" elem))
-                                     (_ elem)))
-                                 t))
-    (tsp--wrap-query (tsc-make-query (tree-sitter-require language))
+    (tsp--wrap-query (tsc-make-query (tree-sitter-require language)
+                                     (cl-loop for pattern in query
+                                              ;; Keep track of which pattern we're inspecting to match it with results of
+                                              ;; `tsc-query-matches' later
+                                              for i from 0
+                                              collect
+                                              (tsp--walk-query pattern
+                                                               (lambda (elem)
+                                                                 (message "elem: %s" elem)
+                                                                 (pcase elem
+                                                                   ((and `(:pred ,fn . ,args)
+                                                                         (guard (functionp fn))
+                                                                         (guard (every (lambda (x) (or (tsp--node-capture-p x)
+                                                                                                       (stringp x)))
+                                                                                       args)))
+                                                                    (let ((capture (cl-loop for cand = (intern (format "%s%s" prefix counter))
+                                                                                            do (incf counter)
+                                                                                            while (memq cand conflicts)
+                                                                                            finally return cand)))
+                                                                      (push `(,capture ,fn . ,args) predicates)
+                                                                      capture))
+                                                                   (`(:pred . ,_)
+                                                                    (signal 'treesit-query-error (format "Invalid :pred use: %s" elem)))
+                                                                   ((and `(:match ,pat ,node)
+                                                                         (guard (stringp pat)))
+                                                                    `(.match? ,node ,pat))
+                                                                   (`(:match . ,_)
+                                                                    (signal 'treesit-query-error (format "Invalid :match use: %s" elem)))
+                                                                   (`(:equal ,left ,right) `(.eq? ,left ,right))
+                                                                   (`(:equal . ,_)
+                                                                    (signal 'treesit-query-error (format "Invalid :equal use: %s" elem)))
+                                                                   ((and `(,sym . ,_)
+                                                                         (guard (keywordp sym)))
+                                                                    (signal 'treesit-query-error (format "Unknown predicate: %s" elem)))
+                                                                   ((pred keywordp)
+                                                                    (signal 'treesit-query-error (format "Invalid predicate use: %s" elem)))
+                                                                   (_ (progn (when (and (listp elem) (eq (first elem) :pred)) (debug)) elem))))
+                                                               t)))
                      (reverse predicates))))
 
 (tsp--node-defun treesit-query-capture ((node parser) query &optional beg end node-only)
