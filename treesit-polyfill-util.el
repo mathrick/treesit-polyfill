@@ -249,20 +249,28 @@ If it's a string, run `tsp--unexpand-query', else return it unchanged"
 (defun tsp--walk-query (query fn &optional subst)
   "Walk the QUERY, recursively running FN on each element.
 
-FN should be a function of two arguments, (ELEM PARENT). It will
-be called on each subtree before descending, then on each of its
-elements. If SUBST is t, FN's return value will be used instead
+FN will be called on each subtree before descending, then on each
+of its elements. It should be a function of two arguments,
+\(ELEM PARENTS), where ELEM is the element or subtree being
+visited, and PARENTS is a list of elements descended into to get
+to ELEM. If SUBST is t, FN' return value will be used instead
 of the element if it's different. If a substitution was made, it
-will not be further descended into."
-  (cl-loop with tree = (tsp--query-as-sexp query)
-           for elem in tree
-           for prev = nil then elem
-           if (listp elem)
-           collect (let ((candidate (funcall fn elem)))
-                     (if (eq candidate elem)
-                         (tsp--walk-query elem fn)
-                       candidate))
-           else collect (funcall fn elem)))
+will not be further descended into.
+
+Return the tree, possibly modified."
+  (cl-labels ((walk (visited parents)
+                    (cl-loop with parents = (cons visited parents)
+                             for elem being the elements of visited
+                             for candidate = (funcall fn elem parents)
+                             for candidate = (if subst candidate elem)
+                             if (and (sequencep elem)
+                                     (eq candidate elem))
+                             collect (walk elem parents) into ret
+                             else collect candidate into ret
+                             finally return (if (sequencep visited)
+                                                (coerce ret (type-of visited))
+                                              ret))))
+      (walk (tsp--query-as-sexp query) ())))
 
 (defun tsp--node-capture-p (sym)
   "Return non-nil if SYM is a node capture (ie. symbol of the form @something)."

@@ -608,6 +608,11 @@ You can use ‘treesit-query-validate’ to validate and debug a query."
   ;;                    alternative: (else_clause body: (block (expression_statement (integer) @numalt))))
   ;;    The capture errors out because @numalt is not visible in the scope in which :equal is declared
   ;;
+  ;;    UPDATE: even more testing indicates that there are no scopes, BUT, captures are
+  ;;    only visible after they've been first mentioned, in depth-first order. I.e. in the
+  ;;    example above, after @numalt has been declared, a predicate can refer to @num or
+  ;;    @numcond just as well and it's considered valid.
+
   ;; Other notes:
   ;;  * Treesitter's upstream docs on the subject are awful and explain nothing
   ;;  * treesit.el's `:match' predicate seems to be equivalent to TSC's `.any-match?',
@@ -624,50 +629,69 @@ You can use ‘treesit-query-validate’ to validate and debug a query."
         ;; In case one of the captures in the query somehow manages to conflict with one
         ;; of the ones we generate
         (conflicts ()))
+    ;; Meat of the compiler. Here we translate from treesit.el's :foo syntax to TSC's
+    ;; .foo?, and also precompile :pred so we can emulate it later in `treesit-query-capture'
+    (cl-flet ((transform (elem parents)
+                (pcase elem
+                  ((and `(:pred ,fn . ,args)
+                        (guard (functionp fn))
+                        (guard (every (lambda (x) (or (tsp--node-capture-p x)
+                                                      (stringp x)))
+                                      args)))
+                   (let ((capture (cl-loop for cand = (intern (format "%s%s" prefix counter))
+                                           do (incf counter)
+                                           while (memq cand conflicts)
+                                           finally return cand)))
+                     (push `(,capture ,fn . ,args) predicates)
+                     capture))
+                  (`(:pred . ,_)
+                   (signal 'treesit-query-error (format "Invalid :pred use: %s" elem)))
+                  ((and `(:match ,pat ,node)
+                        (guard (stringp pat)))
+                   `(.match? ,node ,pat))
+                  (`(:match . ,_)
+                   (signal 'treesit-query-error (format "Invalid :match use: %s" elem)))
+                  (`(:equal ,left ,right) `(.eq? ,left ,right))
+                  (`(:equal . ,_)
+                   (signal 'treesit-query-error (format "Invalid :equal use: %s" elem)))
+                  ((and `(,sym . ,_)
+                        (guard (keywordp sym)))
+                   (signal 'treesit-query-error (format "Unknown predicate: %s" elem)))
+                  ((pred keywordp)
+                   (signal 'treesit-query-error (format "Invalid predicate use: %s" elem)))
+                  (_ (progn (when (and (listp elem) (eq (first elem) :pred)) (debug)) elem)))))
     (tsp--walk-query query
-                     (lambda (elem )
+                     (lambda (elem _)
                        (when (and (symbolp elem)
                                   (string-prefix-p prefix (tsp--sym-name elem)))
                          (push elem conflicts))))
     (tsp--wrap-query (tsc-make-query (tree-sitter-require language)
                                      (cl-loop for pattern in query
-                                              ;; Keep track of which pattern we're inspecting to match it with results of
-                                              ;; `tsc-query-matches' later
-                                              for i from 0
-                                              collect
-                                              (tsp--walk-query pattern
-                                                               (lambda (elem)
-                                                                 (message "elem: %s" elem)
-                                                                 (pcase elem
-                                                                   ((and `(:pred ,fn . ,args)
-                                                                         (guard (functionp fn))
-                                                                         (guard (every (lambda (x) (or (tsp--node-capture-p x)
-                                                                                                       (stringp x)))
-                                                                                       args)))
-                                                                    (let ((capture (cl-loop for cand = (intern (format "%s%s" prefix counter))
-                                                                                            do (incf counter)
-                                                                                            while (memq cand conflicts)
-                                                                                            finally return cand)))
-                                                                      (push `(,capture ,fn . ,args) predicates)
-                                                                      capture))
-                                                                   (`(:pred . ,_)
-                                                                    (signal 'treesit-query-error (format "Invalid :pred use: %s" elem)))
-                                                                   ((and `(:match ,pat ,node)
-                                                                         (guard (stringp pat)))
-                                                                    `(.match? ,node ,pat))
-                                                                   (`(:match . ,_)
-                                                                    (signal 'treesit-query-error (format "Invalid :match use: %s" elem)))
-                                                                   (`(:equal ,left ,right) `(.eq? ,left ,right))
-                                                                   (`(:equal . ,_)
-                                                                    (signal 'treesit-query-error (format "Invalid :equal use: %s" elem)))
-                                                                   ((and `(,sym . ,_)
-                                                                         (guard (keywordp sym)))
-                                                                    (signal 'treesit-query-error (format "Unknown predicate: %s" elem)))
-                                                                   ((pred keywordp)
-                                                                    (signal 'treesit-query-error (format "Invalid predicate use: %s" elem)))
-                                                                   (_ (progn (when (and (listp elem) (eq (first elem) :pred)) (debug)) elem))))
-                                                               t)))
-                     (reverse predicates))))
+                                              for transformed = (tsp--walk-query pattern #'transform t)
+                                              ;; Because TS's "scope" for what captures can be referenced in a predicate
+                                              ;; is essentially "anything that comes earlier in the text of the same
+                                              ;; pattern, no matter the nesting structure", we do a depth-first walk to
+                                              ;; grab an ordered list of when captures are declared
+                                              for scope = ()
+                                              do (tsp--walk-query transformed
+                                                                  (lambda (elem _)
+                                                                    (when (tsp--node-capture-p elem)
+                                                                      (pushnew elem scope))))
+                                              ;; Now that we have a "scope", just walk every sublist in order, and error out
+                                              ;; if anything references things it shouldn't be able to see
+                                              do (cl-loop for (capture . visible) on scope
+                                                          do (when-let ((maybe-pred (alist-get capture predicates))
+                                                                        (fn (car maybe-pred))
+                                                                        (args (cdr maybe-pred))
+                                                                        (invalid (remove-if-not (lambda (x)
+                                                                                                  (and (tsp--node-capture-p x)
+                                                                                                       (not (memq x visible))))
+                                                                                                args)))
+                                                               (signal 'treesit-query-error (format "Unknown capture group %s in %s"
+                                                                                             (mapconcat #'prin1-to-string invalid ", ")
+                                                                                             `(:pred ,fn ,@args)))))
+                                              collect transformed))
+                     (reverse predicates)))))
 
 (tsp--node-defun treesit-query-capture ((node parser) query &optional beg end node-only)
   "Query NODE with patterns in QUERY.

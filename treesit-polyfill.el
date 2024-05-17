@@ -7,6 +7,8 @@
 ;; Maintainer: Maciej Katafiasz <mathrick@disroot.org>
 ;; Keywords: treesit, tree-sitter, languages
 ;; Package: treesit-polyfill
+;; Version: 0.0.1
+;; Package-Requires: (dash)
 
 ;; This file is NOT part of GNU Emacs.
 
