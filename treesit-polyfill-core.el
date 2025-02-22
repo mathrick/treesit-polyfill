@@ -23,7 +23,12 @@
 
 ;;; Code:
 
+(eval-when-compile
+  (require 'cl-lib))
+
 (require 'tree-sitter)
+(require 'treesit-polyfill-util)
+
 
 (defalias 'treesit-parser-p 'tsc-parser-p)
 (defalias 'treesit-node-p 'tsc-node-p)
@@ -242,7 +247,7 @@ that case.
 REWRAP means the return value will be automatically wrapped via
 `tsp--wrap-node', using the same parser value as was passed in."
   (declare (indent defun))
-  (destructuring-bind (node-var &optional parser-var
+  (cl-destructuring-bind (node-var &optional parser-var
                                 &key (allow-nil t) rewrap)
       (if (listp node-and-parser)
           node-and-parser
@@ -440,8 +445,8 @@ Return nil if there is no such node.
 If NAMED is non-nil, look for named child only.  NAMED defaults to nil.
 If NODE is nil, return nil."
   (if named
-      (tsc-get-named-descendant-for-position-range node)
-    (tsc-get-descendant-for-position-range node)))
+      (tsc-get-named-descendant-for-position-range node beg end)
+    (tsc-get-descendant-for-position-range node beg end)))
 
 (tsp--node-alias treesit-node-eq () tsc-node-eq
   "Return non-nil if NODE1 and NODE2 refer to the same node.
@@ -529,7 +534,7 @@ a naked QUERY (ie. not a cons), in which case the PREDICATES-VAR will
 be bound to nil."
   (declare (indent defun))
   `(pcase ,query
-     ((and (or `(,,query-var . ,,predicates-var))
+     ((and `(,,query-var . ,,predicates-var)
            (guard (tsc-query-p ,query-var)))
       ,@body)
      ((pred tsc-query-p)
@@ -631,7 +636,7 @@ You can use ‘treesit-query-validate’ to validate and debug a query."
         (conflicts ()))
     ;; Meat of the compiler. Here we translate from treesit.el's :foo syntax to TSC's
     ;; .foo?, and also precompile :pred so we can emulate it later in `treesit-query-capture'
-    (cl-flet ((transform (elem parents)
+    (cl-flet ((transform (elem _parents)
                 (pcase elem
                   ((and `(:pred ,fn . ,args)
                         (guard (functionp fn))
@@ -731,10 +736,11 @@ the query."
                                                              (byte-to-position end-byte)))))))
       (cl-loop for (i . captures) in matches
                collect
-               (cl-loop inner with captures = (append captures nil)
+               (cl-loop named inner
+                        with captures = (append captures nil)
                         for (capture . node-ptr) in captures
                         collect (if-let ((predicate (alist-get capture predicates)))
-                                    (destructuring-bind (pred-fn &rest args)
+                                    (cl-destructuring-bind (pred-fn &rest args)
                                         predicate
                                       )
                                   ;; If it's not one of our magic captures, just let it through
