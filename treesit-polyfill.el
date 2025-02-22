@@ -28,6 +28,9 @@
 ;;; Code:
 
 (require 'treesit-polyfill-core)
+(require 'treesit-polyfill-parser)
+(require 'treesit-polyfill-node)
+(require 'treesit-polyfill-query)
 
 (defun treesit-available-p ()
   "Return non-nil if tree-sitter support is built-in and available."
