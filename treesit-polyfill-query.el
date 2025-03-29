@@ -91,36 +91,44 @@ tree-sit.el does not support the same set of predicates as
 treesit.el, so we need to emulate some of them."
   (cons query predicates))
 
-(cl-defmacro tsp--unwrap-query ((query-var predicates-var) query &body body)
+(cl-defmacro tsp--unwrap-query ((query-var predicates-var &key language) query &body body)
   "Helper to unwrap the cons of (QUERY . PREDICATES) inside BODY.
 The unwrapped values will be bound to QUERY-VAR and PREDICATES-VAR.
 
-QUERY must satisfy `tsc-query-p'. It is also permissible to pass in
-a naked QUERY (ie. not a cons), in which case the PREDICATES-VAR will
-be bound to nil."
-  (declare (indent defun))
-  `(pcase ,query
-     ((and `(,,query-var . ,,predicates-var)
-           (guard (tsc-query-p ,query-var)))
-      ,@body)
-     ((pred tsc-query-p)
-      (let ((,query-var ,query)
-            (,predicates-var nil))
-         ,@body))
-     (_
-      (error "%s is not a valid treesit-polyfill query, should be (cons QUERY PREDICATES)" ,query))))
+QUERY must satisfy `tsc-query-p', or be a valid input to
+`treesit-query-compile' It is also permissible to pass in a naked
+QUERY (ie. not a cons), in which case the PREDICATES-VAR will be
+bound to nil."
+  (declare (indent 2))
+  (let ((query-and-predicates (gensym "query-and-predicates")))
+    `(let* ((,query-and-predicates
+             (pcase ,query
+               ((and `(,,query-var . ,,predicates-var)
+                     (guard (tsc-query-p ,query-var)))
+                (cons ,query-var ,predicates-var))
+               ((pred tsc-query-p)
+                (cons ,query-var nil))
+               ((pred listp)
+                (let* ((lang ,language)
+                       (compiled (treesit-query-compile ,language ,query)))
+                  compiled))
+               (_
+                (error "%S is not a valid treesit-polyfill query, should be (cons QUERY PREDICATES)" ,query))))
+            (,query-var (car ,query-and-predicates))
+            (,predicates-var (cdr ,query-and-predicates)))
+       ,@body)))
 
 (cl-defmacro tsp--query-defun (name (query-and-predicates &rest args)
                                    &body body)
   "Unwrapping defun variant for queries, See `tsp--unwrapping-defun' for details"
   (declare (indent defun))
-  (cl-destructuring-bind (query-var &optional predicate-var &key (allow-nil t) rewrap)
+  (cl-destructuring-bind (query-var &optional predicate-var &key (allow-nil t) rewrap language)
       (if (listp query-and-predicates)
           query-and-predicates
         (list query-and-predicates))
     (let ((vars-and-options `((,query-var ,predicate-var)
                               :allow-nil ,allow-nil :rewrap ,rewrap)))
-      `(tsp--unwrapping-defun :node ,name (,vars-and-options ,@args)
+      `(tsp--unwrapping-defun :query ,name (,vars-and-options ,@args)
         ,@body))))
 
 (defun treesit-query-compile (language query &optional eager)
@@ -204,7 +212,6 @@ You can use ‘treesit-query-validate’ to validate and debug a query."
   ;;    `.match?', but that shouldn't be a problem
   ;;  * For `:equal', the behaviour is seemingly the same as `.eq?'. Again, no equivalent
   ;;    of `.any-eq?'
-
   (let ((query (tsp--query-as-sexp query))
         ;; TSC needs to get a list of queries (even if the list contains
         ;; only one element), whereas treesit.el accepts a sexp
@@ -213,7 +220,7 @@ You can use ‘treesit-query-validate’ to validate and debug a query."
         (query (if (every #'sequencep query)
                    query
                  (list query)))
-        (prefix "@tsp--pred-")
+        (prefix "tsp--transformed-pred-")
         (counter 0)
         ;; Store every place where :pred appears in the query, so we can emulate them
         (predicates ())
@@ -232,9 +239,20 @@ You can use ‘treesit-query-validate’ to validate and debug a query."
                    (let ((capture (cl-loop for cand = (intern (format "%s%s" prefix counter))
                                            do (incf counter)
                                            while (memq cand conflicts)
-                                           finally return cand)))
+                                           finally return cand))
+                         (args (cl-loop for arg in args
+                                        collect (if (symbolp arg)
+                                                    ;; Chop off the leading @ to make matching esier
+                                                    (intern (substring (symbol-name arg) 1))
+                                                  arg))))
                      (push `(,capture ,fn . ,args) predicates)
-                     capture))
+                     ;; Captures in queries are prefixed with @, but captures are
+                     ;; returned,without, so we need to store unprefixed name in
+                     ;; predicates but return prefix result
+                     (intern (format "@%s" capture))))
+                  ((and `(:pred ,fn . ,args)
+                        (guard (not (functionp fn))))
+                   (signal 'treesit-query-error (format "Invalid :pred function: %s. :pred only supports functions defined with DEFUN" fn)))
                   (`(:pred . ,_)
                    (signal 'treesit-query-error (format "Invalid :pred use: %s" elem)))
                   ((and `(:match ,pat ,node)
@@ -250,7 +268,7 @@ You can use ‘treesit-query-validate’ to validate and debug a query."
                    (signal 'treesit-query-error (format "Unknown predicate: %s" elem)))
                   ((pred keywordp)
                    (signal 'treesit-query-error (format "Invalid predicate use: %s" elem)))
-                  (_ (progn (when (and (listp elem) (eq (first elem) :pred)) (debug)) elem)))))
+                  (_ elem))))
     (tsp--walk-query query
                      (lambda (elem _)
                        (when (and (symbolp elem)
@@ -279,12 +297,12 @@ You can use ‘treesit-query-validate’ to validate and debug a query."
                                                                                                        (not (memq x visible))))
                                                                                                 args)))
                                                                (signal 'treesit-query-error (format "Unknown capture group %s in %s"
-                                                                                             (mapconcat #'prin1-to-string invalid ", ")
-                                                                                             `(:pred ,fn ,@args)))))
+                                                                                                    (mapconcat #'prin1-to-string invalid ", ")
+                                                                                                    `(:pred ,fn ,@args)))))
                                               collect transformed))
                      (reverse predicates)))))
 
-(tsp--query-defun treesit-query-capture ((node parser) query &optional beg end node-only)
+(defun treesit-query-capture (node query &optional beg end node-only)
   "Query NODE with patterns in QUERY.
 
 Return a list of (CAPTURE_NAME . NODE).  CAPTURE_NAME is the name
@@ -312,24 +330,33 @@ is created.
 Signal ‘treesit-query-error’ if QUERY is malformed or something else
 goes wrong.  You can use ‘treesit-query-validate’ to validate and debug
 the query."
-  (tsp--unwrap-query (query predicates) query
-    ;; FIXME: Need to account for NODE being a parser or language
-    (let* ((buffer (treesit-parser-buffer parser))
-           (matches (tsc-query-matches query node
-                                       (lambda (beg-byte end-byte)
-                                         (with-current-buffer buffer
-                                           (buffer-substring (byte-to-position beg-byte)
-                                                             (byte-to-position end-byte)))))))
-      (cl-loop for (i . captures) in matches
-               collect
-               (cl-loop named inner
-                        with captures = (append captures nil)
-                        for (capture . node-ptr) in captures
-                        collect (if-let ((predicate (alist-get capture predicates)))
-                                    (cl-destructuring-bind (pred-fn &rest args)
-                                        predicate)
-                                  ;; If it's not one of our magic captures, just let it through
-                                  (cons capture (tsp--wrap-node node-ptr parser))))))))
+  (tsp--unwrap-node (node parser :allow-coerce-parser t) node
+    (tsp--unwrap-query (query predicates
+                              :language (treesit-parser-language parser))
+        query
+      (let* ((buffer (treesit-parser-buffer parser))
+             (matches (tsc-query-matches query node
+                                         (lambda (beg-byte end-byte)
+                                           (with-current-buffer buffer
+                                             (buffer-substring (byte-to-position beg-byte)
+                                                               (byte-to-position end-byte)))))))
+        (cl-loop for (i . captures) across matches
+                 append
+                 (cl-loop named inner
+                          with captures = (cl-coerce captures 'list)
+                          for (capture . node-ptr) in captures
+                          ;; If it's a previously pre-compiled :pred, we need to check if it matches
+                          for (pred-fn . args) = (alist-get capture predicates)
+                          for satisfied = (when pred-fn
+                                            (apply pred-fn (cl-loop for arg in args
+                                                                    collect (or (when-let ((node (alist-get arg captures)))
+                                                                                  (cons node parser))
+                                                                                ;; If it's not in captures, then it must be a string
+                                                                                arg))))
+                          if (and pred-fn (not satisfied))
+                          return nil
+                          if (not pred-fn)
+                          collect (cons capture (tsp--wrap-node node-ptr parser))))))))
 
 ;; We need to be able to parse string form of TS queries back into sexps, because we need
 ;; to rewrite them in order to implement treesit.el's `:pred' functionality. `read' can't

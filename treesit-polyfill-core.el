@@ -75,7 +75,7 @@ that case.
 REWRAP means the return value will be automatically wrapped via
 `tsp--wrap-TYPE', using the same auxiliary values as were passed in."
   (declare (indent defun))
-  (cl-destructuring-bind (vars &key (allow-nil t) rewrap)
+  (cl-destructuring-bind (vars &rest keys &key (allow-nil t) rewrap &allow-other-keys)
       (if (listp vars-and-options)
           vars-and-options
         (list vars-and-options))

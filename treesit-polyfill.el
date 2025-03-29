@@ -46,6 +46,20 @@
   (treesit-parser-language
    (treesit-node-parser node)))
 
+(defun treesit-node-text (node &optional no-property)
+  "Return the buffer (or string) content corresponding to NODE.
+If optional argument NO-PROPERTY is non-nil, remove text
+properties."
+  (when node
+    (with-current-buffer (treesit-node-buffer node)
+      (if no-property
+          (buffer-substring-no-properties
+           (treesit-node-start node)
+           (treesit-node-end node))
+        (buffer-substring
+         (treesit-node-start node)
+         (treesit-node-end node))))))
+
 (defvar-local treesit-language-at-point-function nil
   "A function that returns the language at point.
 This is used by `treesit-language-at', which is used by various

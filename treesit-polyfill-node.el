@@ -32,23 +32,41 @@ does not provide API to retrieve a node's parser, but treesit.el
 does."
   (cons node parser))
 
-(cl-defmacro tsp--unwrap-node ((node-var parser-var) node &body body)
+(cl-defmacro tsp--unwrap-node ((node-var parser-var &key allow-coerce-parser) node &body body)
   "Helper to unwrap the cons of (NODE . PARSER) inside BODY.
 The unwrapped values will be bound to NODE-VAR and PARSER-VAR.
 
 NODE must satisfy `tsc-node-p'. It is also permissible to pass in
 a naked NODE (ie. not a cons), in which case the PARSER-VAR will
-be bound to nil."
-  `(pcase ,node
-     ((and `(,,node-var . ,,parser-var)
-           (guard (tsc-node-p ,node-var)))
-      ,@body)
-     ((pred tsc-node-p)
-      (let ((,node-var ,node)
-            (,parser-var nil))
-         ,@body))
-     (_
-      (error "%s is not a valid treesit-polyfill node, should be (cons NODE PARSER)" ,node))))
+be bound to nil.
+
+If ALLOW-COERCE-PARSER is non-nil, then a parser is also
+acceptable, in which case the root node of its tree will be
+used. A parser can also be represented by a symmbol naming a
+language, which represents the default parser for the language in
+the current buffer. If that parser doesn't exist, it will be
+created."
+  (declare (indent 2))
+  (let ((node-and-parser (gensym "node-and-parser")))
+    `(let* ((,node-and-parser
+             (pcase ,node
+               ((and `(,,node-var . ,,parser-var)
+                     (guard (tsc-node-p ,node-var)))
+                (cons ,node-var ,parser-var))
+               ((pred tsc-node-p)
+                (cons ,node nil))
+               ,@(when allow-coerce-parser
+                   `(((pred tsc-parser-p)
+                      (cons (treesit-parser-root-node ,node) ,node))
+                     ((pred symbolp)
+                      (let* ((,parser-var (treesit-parser-create ,node))
+                             (,node-var (treesit-parser-root-node ,parser-var)))
+                        (cons ,node-var ,parser-var)))))
+               (_
+                (error "%S is not a valid treesit-polyfill node, should be (cons NODE PARSER)" ,node))))
+            (,node-var (car ,node-and-parser))
+            (,parser-var (cdr ,node-and-parser)))
+       ,@body)))
 
 (cl-defmacro tsp--node-defun (name (node-and-parser &rest args)
                                    &body body)

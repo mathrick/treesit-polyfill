@@ -28,6 +28,10 @@
 
 (defalias 'treesit-parser-p 'tsc-parser-p)
 
+;; Read approximately 16KiB chunks by default (might be > 16KiB for non-ASCII)
+(defvar tsp--read-chunk-size (* 16 1024)
+  "Maximum size of a chunk that will be read from a buffer at once for parsing")
+
 (defvar tsp--buffer-parser-map
   (make-hash-table)
   "Hash table providing a mapping from buffers to their parsers.
@@ -50,6 +54,17 @@ See also `tsp--buffer-parser-map'.
 
 This is a part of the treesit-polyfill API.")
 
+(defvar tsp--parser-tree-map
+  (make-hash-table)
+  "Hash table providing a mapping from parsers to their canonical parse trees.
+
+treesit.el API has a concept of a single, designated parse tree
+for each parser that's automatically updated, which
+tree-sitter.el does not have. This mapping allows us to cache
+results of previous parses.
+
+This is a part of the treesit-polyfill API.")
+
 (defun tsp--get-target-buffer (buffer)
   "Get the target buffer for treesit operations. This means if
   BUFFER is nil, use `current-buffer'. For indirect buffers, look
@@ -65,6 +80,27 @@ This is a part of the treesit-polyfill API.")
            ;; parsers" in the outer loop, have to use nested
            do (cl-loop for parser in parsers
                        do (setf (gethash parser tsp--parser-buffer-map) buf))))
+
+(defun tsp--line-bytecol-position (buffer line-number byte-column)
+  "Given LINE-NUMBER and BYTE-COLUMN, return its position in current buffer"
+  (goto-char (point-min))
+  (forward-line line-number)
+  (byte-to-position (+ (position-bytes (line-beginning-position))
+                       byte-column)))
+
+(defun tsp--make-buffer-chunk-reader (buffer)
+  (lambda (bytepos line-number byte-column)
+    (save-excursion
+      (with-current-buffer buffer
+        (widen)
+        (let* ((start (min (if bytepos
+                               ;; `byte-to-position' returns nil for out of range values
+                               (or (byte-to-position bytepos) (point-max))
+                             (tsp--line-bytecol-position buffer line-number byte-column))
+                           (point-max)))
+               (end (min (+ start tsp--read-chunk-size)
+                         (point-max))))
+          (buffer-substring-no-properties start end))))))
 
 (defun tsp--lang (lang)
   "Given LANG, return a value that satisfies
@@ -83,6 +119,12 @@ This is a part of the treesit-polyfill API.")
     (_
      (error "%s is not a valid tree-sitter language" lang))))
 
+(defun tsp--parser-update-tree (parser)
+  (setf (gethash parser tsp--parser-tree-map)
+        (tsc-parse-chunks parser
+                          (tsp--make-buffer-chunk-reader (treesit-parser-buffer parser))
+                          nil)))
+
 (defun treesit-parser-create (language &optional buffer no-reuse)
   "Create and return a parser in BUFFER for LANGUAGE.
 
@@ -97,7 +139,7 @@ That is, indirect buffers use their base buffer’s parsers.  Lisp
 programs should widen as necessary should they want to use a parser in
 an indirect buffer."
   (let* ((buffer (tsp--get-target-buffer buffer))
-         (language (tree-sitter-require (tsp--lang-name language)))
+         (language (tree-sitter-require language))
          (parsers (treesit-parser-list buffer))
          (existing (and (not no-reuse)
                         (first (seq-filter (lambda (parser)
@@ -144,7 +186,8 @@ This symbol is the one used to create the parser."
 
 (defun treesit-parser-root-node (parser)
   "Return the root node of PARSER."
-  (tsp--wrap-node (tsc-root-node parser) parser))
+  (let ((tree (gethash parser tsp--parser-tree-map)))
+    (tsp--wrap-node (tsc-root-node (or tree (tsp--parser-update-tree parser))) parser)))
 
 (defun treesit-parser-set-included-ranges (parser ranges)
   "Limit PARSER to RANGES.
